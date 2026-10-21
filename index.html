@@ -1,0 +1,434 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>South Georgia Pine Woods – Three.js</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { width: 100%; height: 100%; overflow: hidden; background: #1a1a12; }
+  canvas { display: block; }
+
+  #ui {
+    position: absolute;
+    top: 16px;
+    left: 16px;
+    font-family: 'Segoe UI', system-ui, sans-serif;
+    color: #e8e0d0;
+    background: rgba(20, 18, 12, 0.75);
+    backdrop-filter: blur(6px);
+    border: 1px solid rgba(180, 160, 120, 0.28);
+    border-radius: 8px;
+    padding: 14px 18px;
+    font-size: 13px;
+    line-height: 1.55;
+    pointer-events: none;
+    user-select: none;
+    max-width: 290px;
+  }
+  #ui h2 { font-size: 15px; font-weight: 600; margin-bottom: 8px; color: #f0e8d0; }
+  #ui .row { margin: 2px 0; }
+  #ui .label { color: #b0a890; }
+  #ui kbd {
+    display: inline-block;
+    background: rgba(60, 50, 30, 0.7);
+    border: 1px solid rgba(140, 120, 80, 0.4);
+    border-radius: 3px;
+    padding: 1px 5px;
+    font-size: 11px;
+    font-family: inherit;
+  }
+  #crosshair {
+    position: absolute;
+    top: 50%; left: 50%;
+    width: 18px; height: 18px;
+    margin: -9px 0 0 -9px;
+    pointer-events: none;
+    opacity: 0.55;
+  }
+  #crosshair::before, #crosshair::after {
+    content: '';
+    position: absolute;
+    background: #e8e0d0;
+  }
+  #crosshair::before { width: 18px; height: 1.5px; top: 8px; left: 0; }
+  #crosshair::after  { width: 1.5px; height: 18px; top: 0; left: 8px; }
+</style>
+</head>
+<body>
+<div id="ui">
+  <h2>South Georgia Pine Woods</h2>
+  <div class="row"><span class="label">Move:</span> <kbd>W</kbd> <kbd>A</kbd> <kbd>S</kbd> <kbd>D</kbd></div>
+  <div class="row"><span class="label">Look:</span> Mouse</div>
+  <div class="row"><span class="label">Toggle View:</span> <kbd>V</kbd> or <kbd>P</kbd></div>
+  <div class="row" style="margin-top:8px"><span class="label">View:</span> <span id="viewMode">First-Person</span></div>
+  <div class="row"><span class="label">Pos:</span> <span id="coords">0, 0, 0</span></div>
+</div>
+<div id="crosshair"></div>
+
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+    "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+  }
+}
+</script>
+
+<script type="module">
+import * as THREE from 'three';
+import { PointerLockControls } from 'three/addons/controls/PointerLockControls.js';
+import { FBXLoader } from 'three/addons/loaders/FBXLoader.js';
+
+/* ================================================================ */
+/*  EASY SETTINGS – change these                                    */
+/* ================================================================ */
+const GOBLIN_FBX_PATH = './models/goblin.fbx';  // ← path to your file
+const GOBLIN_SCALE    = 0.02;                   // try 0.01, 0.02, 0.05, 0.1, 1.0
+const GOBLIN_X        = 8.5;
+const GOBLIN_Z        = -12;
+/* ================================================================ */
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0xc8c0a8);
+scene.fog = new THREE.FogExp2(0xc8c0a8, 0.0028);
+
+const camera = new THREE.PerspectiveCamera(70, innerWidth / innerHeight, 0.1, 1000);
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setSize(innerWidth, innerHeight);
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+document.body.appendChild(renderer.domElement);
+
+// Lighting
+scene.add(new THREE.AmbientLight(0xfff5e0, 0.55));
+const sun = new THREE.DirectionalLight(0xfff0d0, 1.15);
+sun.position.set(80, 120, 40);
+sun.castShadow = true;
+sun.shadow.mapSize.set(2048, 2048);
+sun.shadow.camera.near = 10;
+sun.shadow.camera.far = 400;
+sun.shadow.camera.left = sun.shadow.camera.bottom = -160;
+sun.shadow.camera.right = sun.shadow.camera.top = 160;
+sun.shadow.bias = -0.0003;
+scene.add(sun);
+scene.add(new THREE.DirectionalLight(0xb0c0d0, 0.25).translateX(-60).translateY(40).translateZ(-80));
+
+// Terrain
+function getTerrainHeight(x, z) {
+  return Math.sin(x * 0.015) * Math.cos(z * 0.012) * 1.8
+       + Math.sin(x * 0.04 + z * 0.03) * 0.6;
+}
+
+const groundGeo = new THREE.PlaneGeometry(600, 600, 80, 80);
+const posAttr = groundGeo.attributes.position;
+for (let i = 0; i < posAttr.count; i++) {
+  const x = posAttr.getX(i);
+  const y = posAttr.getY(i);
+  posAttr.setZ(i, getTerrainHeight(x, y));
+}
+groundGeo.computeVertexNormals();
+
+const ground = new THREE.Mesh(
+  groundGeo,
+  new THREE.MeshStandardMaterial({ color: 0x6b4e2e, roughness: 0.92 })
+);
+ground.rotation.x = -Math.PI / 2;
+ground.receiveShadow = true;
+scene.add(ground);
+
+// Underbrush
+const brushCount = 260;
+const brushGeo = new THREE.ConeGeometry(0.7, 0.9, 5);
+const brushMat = new THREE.MeshStandardMaterial({ color: 0x3a5a28, roughness: 0.85 });
+const brushMesh = new THREE.InstancedMesh(brushGeo, brushMat, brushCount);
+brushMesh.castShadow = true;
+const dummy = new THREE.Object3D();
+for (let i = 0; i < brushCount; i++) {
+  const x = (Math.random() - 0.5) * 540;
+  const z = (Math.random() - 0.5) * 540;
+  dummy.position.set(x, getTerrainHeight(x, z) + 0.35, z);
+  dummy.rotation.y = Math.random() * Math.PI;
+  dummy.scale.setScalar(0.55 + Math.random() * 0.95);
+  dummy.updateMatrix();
+  brushMesh.setMatrixAt(i, dummy.matrix);
+}
+brushMesh.instanceMatrix.needsUpdate = true;
+scene.add(brushMesh);
+
+// Trees
+const treeCount = 320;
+const treeData = [];
+const trunkGeo = new THREE.CylinderGeometry(0.18, 0.32, 1, 7);
+const trunkMat = new THREE.MeshStandardMaterial({ color: 0x4a3728, roughness: 0.9 });
+const trunkMesh = new THREE.InstancedMesh(trunkGeo, trunkMat, treeCount);
+trunkMesh.castShadow = true;
+
+const canopyGeos = [
+  new THREE.ConeGeometry(2.8, 3.2, 7),
+  new THREE.ConeGeometry(2.25, 2.9, 7),
+  new THREE.ConeGeometry(1.7, 2.6, 7),
+  new THREE.ConeGeometry(1.15, 2.3, 7)
+];
+const canopyMat = new THREE.MeshStandardMaterial({ color: 0x2e4a22, roughness: 0.88 });
+const canopyMeshes = canopyGeos.map(g => {
+  const m = new THREE.InstancedMesh(g, canopyMat, treeCount);
+  m.castShadow = true;
+  return m;
+});
+
+for (let i = 0; i < treeCount; i++) {
+  let x, z;
+  do {
+    x = (Math.random() - 0.5) * 540;
+    z = (Math.random() - 0.5) * 540;
+  } while (Math.abs(x) < 7 && Math.abs(z) < 45);
+
+  const h = 18 + Math.random() * 13;
+  const rot = Math.random() * Math.PI * 2;
+  const groundY = getTerrainHeight(x, z);
+  treeData.push({ x, z, h, rot });
+
+  dummy.position.set(x, groundY + h * 0.36, z);
+  dummy.rotation.set(0, rot, 0);
+  dummy.scale.set(1, h * 0.72, 1);
+  dummy.updateMatrix();
+  trunkMesh.setMatrixAt(i, dummy.matrix);
+
+  const trunkTop = groundY + h * 0.72;
+  for (let layer = 0; layer < 4; layer++) {
+    dummy.position.set(x, trunkTop - 1.0 + layer * 1.65, z);
+    dummy.rotation.set(0, rot + layer * 0.3, 0);
+    dummy.scale.set(1, 1, 1);
+    dummy.updateMatrix();
+    canopyMeshes[layer].setMatrixAt(i, dummy.matrix);
+  }
+}
+trunkMesh.instanceMatrix.needsUpdate = true;
+canopyMeshes.forEach(m => { m.instanceMatrix.needsUpdate = true; scene.add(m); });
+scene.add(trunkMesh);
+
+/* ------------------------------------------------------------------ */
+/*  Goblin loading with fallback                                       */
+/* ------------------------------------------------------------------ */
+let goblin = null;
+let goblinMixer = null;
+
+function createFallbackGoblin() {
+  const g = new THREE.Group();
+  const bodyMat = new THREE.MeshStandardMaterial({ color: 0x4a7a3a });
+  const darkMat = new THREE.MeshStandardMaterial({ color: 0x3a5a2a });
+
+  const body = new THREE.Mesh(new THREE.BoxGeometry(0.55, 0.7, 0.35), bodyMat);
+  body.position.y = 0.85; body.castShadow = true; g.add(body);
+
+  const head = new THREE.Mesh(new THREE.BoxGeometry(0.42, 0.38, 0.38), bodyMat);
+  head.position.y = 1.45; head.castShadow = true; g.add(head);
+
+  const earGeo = new THREE.ConeGeometry(0.12, 0.28, 4);
+  const earL = new THREE.Mesh(earGeo, bodyMat);
+  earL.position.set(-0.22, 1.62, 0); earL.rotation.z = 0.5; g.add(earL);
+  const earR = earL.clone(); earR.position.x = 0.22; earR.rotation.z = -0.5; g.add(earR);
+
+  const eyeMat = new THREE.MeshStandardMaterial({ color: 0xffee44, emissive: 0x886600 });
+  const eyeL = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.08, 0.06), eyeMat);
+  eyeL.position.set(-0.11, 1.48, 0.18); g.add(eyeL);
+  const eyeR = eyeL.clone(); eyeR.position.x = 0.11; g.add(eyeR);
+
+  const armL = new THREE.Mesh(new THREE.BoxGeometry(0.14, 0.45, 0.14), bodyMat);
+  armL.position.set(-0.38, 0.9, 0); armL.castShadow = true; g.add(armL);
+  const armR = armL.clone(); armR.position.x = 0.38; g.add(armR);
+
+  const legL = new THREE.Mesh(new THREE.BoxGeometry(0.16, 0.5, 0.16), darkMat);
+  legL.position.set(-0.14, 0.3, 0); legL.castShadow = true; g.add(legL);
+  const legR = legL.clone(); legR.position.x = 0.14; g.add(legR);
+
+  return g;
+}
+
+function placeGoblin(model) {
+  model.position.set(GOBLIN_X, getTerrainHeight(GOBLIN_X, GOBLIN_Z), GOBLIN_Z);
+  model.rotation.y = -0.6;
+  scene.add(model);
+  goblin = model;
+  console.log('Goblin placed at', model.position);
+}
+
+// Try loading the FBX
+console.log('Attempting to load goblin from:', GOBLIN_FBX_PATH);
+
+const fbxLoader = new FBXLoader();
+fbxLoader.load(
+  GOBLIN_FBX_PATH,
+  (fbx) => {
+    console.log('FBX loaded successfully!', fbx);
+
+    fbx.scale.setScalar(GOBLIN_SCALE);
+
+    fbx.traverse((child) => {
+      if (child.isMesh) {
+        child.castShadow = true;
+        child.receiveShadow = true;
+      }
+    });
+
+    placeGoblin(fbx);
+
+    if (fbx.animations && fbx.animations.length > 0) {
+      goblinMixer = new THREE.AnimationMixer(fbx);
+      const action = goblinMixer.clipAction(fbx.animations[0]);
+      action.play();
+      console.log('Playing animation:', fbx.animations[0].name);
+    }
+  },
+  (xhr) => {
+    if (xhr.total > 0) {
+      console.log(`Goblin loading: ${(xhr.loaded / xhr.total * 100).toFixed(1)}%`);
+    }
+  },
+  (error) => {
+    console.error('Failed to load FBX. Using fallback goblin instead.');
+    console.error(error);
+    const fallback = createFallbackGoblin();
+    placeGoblin(fallback);
+  }
+);
+
+/* ------------------------------------------------------------------ */
+/*  Player                                                             */
+/* ------------------------------------------------------------------ */
+const player = new THREE.Object3D();
+player.position.set(0, 0, 18);
+scene.add(player);
+
+const eyeHeight = 1.65;
+const playerRadius = 0.45;
+
+function createPlayerCapsule() {
+  const g = new THREE.Group();
+  const mat = new THREE.MeshStandardMaterial({ color: 0x3a6ea5, roughness: 0.7 });
+  const body = new THREE.Mesh(new THREE.CapsuleGeometry(0.28, 0.9, 4, 8), mat);
+  body.position.y = 0.85;
+  body.castShadow = true;
+  g.add(body);
+  return g;
+}
+const playerMesh = createPlayerCapsule();
+player.add(playerMesh);
+playerMesh.visible = false;
+
+const controls = new PointerLockControls(camera, document.body);
+
+const keys = { w: false, a: false, s: false, d: false };
+let isFirstPerson = true;
+const thirdPersonDistance = 6.2;
+const thirdPersonHeight = 2.6;
+
+document.addEventListener('keydown', e => {
+  if (e.code === 'KeyW') keys.w = true;
+  if (e.code === 'KeyA') keys.a = true;
+  if (e.code === 'KeyS') keys.s = true;
+  if (e.code === 'KeyD') keys.d = true;
+
+  if (e.code === 'KeyV' || e.code === 'KeyP') {
+    isFirstPerson = !isFirstPerson;
+    playerMesh.visible = !isFirstPerson;
+    document.getElementById('viewMode').textContent = isFirstPerson ? 'First-Person' : 'Third-Person';
+    document.getElementById('crosshair').style.opacity = isFirstPerson ? '0.55' : '0';
+  }
+});
+
+document.addEventListener('keyup', e => {
+  if (e.code === 'KeyW') keys.w = false;
+  if (e.code === 'KeyA') keys.a = false;
+  if (e.code === 'KeyS') keys.s = false;
+  if (e.code === 'KeyD') keys.d = false;
+});
+
+renderer.domElement.addEventListener('click', () => {
+  if (!controls.isLocked) controls.lock();
+});
+
+function collidesWithTree(x, z) {
+  const r = playerRadius + 0.35;
+  for (const t of treeData) {
+    const dx = x - t.x;
+    const dz = z - t.z;
+    if (dx * dx + dz * dz < r * r) return true;
+  }
+  return false;
+}
+
+const clock = new THREE.Clock();
+const velocity = new THREE.Vector3();
+const direction = new THREE.Vector3();
+const forward = new THREE.Vector3();
+const right = new THREE.Vector3();
+
+function animate() {
+  requestAnimationFrame(animate);
+  const dt = Math.min(clock.getDelta(), 0.05);
+
+  if (controls.isLocked) {
+    velocity.x -= velocity.x * 10.0 * dt;
+    velocity.z -= velocity.z * 10.0 * dt;
+
+    camera.getWorldDirection(forward);
+    forward.y = 0;
+    forward.normalize();
+    right.crossVectors(forward, new THREE.Vector3(0, 1, 0)).normalize();
+
+    direction.set(0, 0, 0);
+    if (keys.w) direction.add(forward);
+    if (keys.s) direction.sub(forward);
+    if (keys.a) direction.sub(right);
+    if (keys.d) direction.add(right);
+    if (direction.lengthSq() > 0) direction.normalize();
+
+    const speed = 11.0;
+    velocity.x += direction.x * speed * dt * 8;
+    velocity.z += direction.z * speed * dt * 8;
+
+    const newX = player.position.x + velocity.x * dt;
+    const newZ = player.position.z + velocity.z * dt;
+
+    if (!collidesWithTree(newX, player.position.z)) player.position.x = newX;
+    if (!collidesWithTree(player.position.x, newZ)) player.position.z = newZ;
+
+    player.position.y = getTerrainHeight(player.position.x, player.position.z);
+  }
+
+  if (isFirstPerson) {
+    camera.position.copy(player.position);
+    camera.position.y += eyeHeight;
+  } else {
+    camera.getWorldDirection(forward);
+    forward.y = 0;
+    forward.normalize();
+    camera.position.copy(player.position);
+    camera.position.y += thirdPersonHeight;
+    camera.position.sub(forward.multiplyScalar(thirdPersonDistance));
+    const lookTarget = player.position.clone();
+    lookTarget.y += 1.3;
+    camera.lookAt(lookTarget);
+  }
+
+  if (goblinMixer) goblinMixer.update(dt);
+
+  document.getElementById('coords').textContent =
+    `${player.position.x.toFixed(1)}, ${player.position.y.toFixed(1)}, ${player.position.z.toFixed(1)}`;
+
+  renderer.render(scene, camera);
+}
+
+animate();
+
+window.addEventListener('resize', () => {
+  camera.aspect = innerWidth / innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(innerWidth, innerHeight);
+});
+</script>
+</body>
+</html>
